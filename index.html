@@ -2263,6 +2263,7 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
   const [colaboradorSel, setColaboradorSel] = useState('');
   const [copiarDesde, setCopiarDesde] = useState('');
   const [quizFormFor, setQuizFormFor] = useState(null);
+  const [editingPreguntaId, setEditingPreguntaId] = useState(null);
   const isQuizComp = componente===QUIZ_COMPONENT;
 
   useEffect(()=>{ setNivel('general'); setArea(''); setCargo(''); setCargoLibre(''); setColaboradorSel(''); setCopiarDesde(''); }, [componente]);
@@ -2302,6 +2303,12 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
   const quitarPregunta = async (q, pid) => {
     const next = {...q, preguntas:q.preguntas.filter(p=>p.id!==pid)};
     await onSave(next);
+  };
+  const editarPregunta = async (q, pid, datos) => {
+    const next = {...q, preguntas:q.preguntas.map(p=>p.id===pid ? {...p, ...datos} : p)};
+    await onSave(next);
+    setEditingPreguntaId(null);
+    showToast('Pregunta actualizada');
   };
   const agregarPreguntaQuiz = async (q, texto, opciones, correcta) => {
     if(!texto.trim() || opciones.some(o=>!o.trim())) { showToast('Completa la pregunta y las 4 opciones'); return; }
@@ -2448,12 +2455,25 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
                   </div>
                   <div className="q-list">
                     {q.preguntas.map(p=>(
-                      <div className="q-list-item" key={p.id}>
-                        <div>
-                          <div>{p.texto}</div>
-                          {isQuiz && p.opciones && <div className="q-opts-mini">{p.opciones.map((o,i)=> i===p.correcta ? <b key={i}>✓ {o}  </b> : <span key={i}>{o}  </span>)}</div>}
-                        </div>
-                        <button className="btn ghost small" onClick={()=>quitarPregunta(q, p.id)}>Quitar</button>
+                      <div className="q-list-item" key={p.id} style={editingPreguntaId===p.id ? {flexDirection:'column', alignItems:'stretch'} : undefined}>
+                        {editingPreguntaId===p.id ? (
+                          isQuiz && p.opciones ? (
+                            <QuizEditForm pregunta={p} onSave={(datos)=>editarPregunta(q,p.id,datos)} onCancel={()=>setEditingPreguntaId(null)}/>
+                          ) : (
+                            <SimpleEditQuestion pregunta={p} onSave={(datos)=>editarPregunta(q,p.id,datos)} onCancel={()=>setEditingPreguntaId(null)}/>
+                          )
+                        ) : (
+                          <>
+                            <div>
+                              <div>{p.texto}</div>
+                              {isQuiz && p.opciones && <div className="q-opts-mini">{p.opciones.map((o,i)=> i===p.correcta ? <b key={i}>✓ {o}  </b> : <span key={i}>{o}  </span>)}</div>}
+                            </div>
+                            <div style={{display:'flex', gap:4}}>
+                              <button className="btn ghost small" onClick={()=>setEditingPreguntaId(p.id)}>Editar</button>
+                              <button className="btn ghost small" onClick={()=>quitarPregunta(q, p.id)}>Quitar</button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                     {isQuiz ? (
@@ -2526,6 +2546,17 @@ const SimpleAddQuestion = ({onAdd}) => {
   );
 };
 
+const SimpleEditQuestion = ({pregunta, onSave, onCancel}) => {
+  const [txt, setTxt] = useState(pregunta.texto);
+  return (
+    <div style={{display:'flex', gap:8, alignItems:'center', width:'100%'}}>
+      <input type="text" value={txt} onChange={e=>setTxt(e.target.value)} style={{flex:1}} autoFocus/>
+      <button className="btn small" onClick={()=>{ if(!txt.trim()){ showToast('Escribe la pregunta'); return; } onSave({texto:txt.trim()}); }}>Guardar</button>
+      <button className="btn ghost small" onClick={onCancel}>Cancelar</button>
+    </div>
+  );
+};
+
 const QuizAddForm = ({onSave, onCancel}) => {
   const [texto, setTexto] = useState('');
   const [opciones, setOpciones] = useState(['','','','']);
@@ -2541,6 +2572,30 @@ const QuizAddForm = ({onSave, onCancel}) => {
       ))}
       <div style={{display:'flex', gap:8, marginTop:8}}>
         <button className="btn small" onClick={()=>onSave(texto, opciones, correcta)}>Guardar pregunta</button>
+        <button className="btn ghost small" onClick={onCancel}>Cancelar</button>
+      </div>
+    </div>
+  );
+};
+
+const QuizEditForm = ({pregunta, onSave, onCancel}) => {
+  const [texto, setTexto] = useState(pregunta.texto);
+  const [opciones, setOpciones] = useState([...(pregunta.opciones||['','','',''])]);
+  const [correcta, setCorrecta] = useState(pregunta.correcta||0);
+  return (
+    <div className="quiz-add-form" style={{width:'100%'}}>
+      <div className="field"><label>Pregunta</label><input type="text" value={texto} onChange={e=>setTexto(e.target.value)} autoFocus/></div>
+      {[0,1,2,3].map(i=>(
+        <div className="opt-row" key={i}>
+          <input type="radio" name={"quizcorrect-edit-"+pregunta.id} checked={correcta===i} onChange={()=>setCorrecta(i)}/>
+          <input type="text" value={opciones[i]} onChange={e=>{const next=[...opciones]; next[i]=e.target.value; setOpciones(next);}} placeholder={`Opción ${i+1}`} style={{flex:1}}/>
+        </div>
+      ))}
+      <div style={{display:'flex', gap:8, marginTop:8}}>
+        <button className="btn small" onClick={()=>{
+          if(!texto.trim() || opciones.some(o=>!o.trim())){ showToast('Completa la pregunta y las 4 opciones'); return; }
+          onSave({texto:texto.trim(), opciones, correcta});
+        }}>Guardar cambios</button>
         <button className="btn ghost small" onClick={onCancel}>Cancelar</button>
       </div>
     </div>
