@@ -10,6 +10,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js" crossorigin="anonymous"></script>
@@ -1308,6 +1309,15 @@ const PortalForm = ({task, portalUser, config, collaborators, questionnaires, ev
 /* =========================================================
    ADMIN APP — sidebar, selector de periodo, navegación
    ========================================================= */
+// Solo para MOSTRAR la pestaña "Súper admin" — la seguridad real la aplica la
+// Cloud Function del lado del servidor (revisa su propia lista SUPER_ADMINS en
+// functions/index.js). Aunque alguien lograra ver esta pestaña sin estar en la
+// lista de la función, la función igual rechazaría la llamada. Mantén esta
+// lista igual a la del archivo functions/index.js.
+const SUPER_ADMINS = [
+  'TU_CORREO_AQUI@ejemplo.com',
+];
+
 const ADMIN_TABS = [
   {group:'Configurar', items:[
     {key:'marca', label:'Marca', num:'00', needsPeriodo:false, adminOnly:true},
@@ -1323,6 +1333,9 @@ const ADMIN_TABS = [
   {group:'Operar', items:[
     {key:'eval', label:'Captura manual', num:'08', needsPeriodo:true, adminOnly:false},
     {key:'results', label:'Resultados', num:'09', needsPeriodo:true, adminOnly:false},
+  ]},
+  {group:'Avanzado', items:[
+    {key:'superadmin', label:'Súper admin', num:'10', needsPeriodo:false, adminOnly:true, superAdminOnly:true},
   ]},
 ];
 
@@ -1392,9 +1405,11 @@ const AdminApp = ({user, marca}) => {
     ? evaluations.filter(e=>{ const ev = collaborators.find(c=>c.id===e.collaboratorId); return ev && misAreas.includes(ev.area); })
     : evaluations;
 
+  const esSuperAdmin = !!(user && user.email && SUPER_ADMINS.map(e=>e.toLowerCase()).includes(user.email.toLowerCase()));
+
   const visibleTabs = ADMIN_TABS.map(group=>({
     ...group,
-    items: group.items.filter(item => !(isSupervisor && item.adminOnly))
+    items: group.items.filter(item => !(isSupervisor && item.adminOnly) && !(item.superAdminOnly && !esSuperAdmin))
   })).filter(group=>group.items.length>0);
 
   return (
@@ -1493,6 +1508,9 @@ const AdminApp = ({user, marca}) => {
         {vista==='usuarios' && periodo && !isSupervisor && (
           <VistaUsuarios usuarios={usuarios} supervisores={supervisores} areas={areas} currentUid={user.uid}
             onSaveSupervisor={saveSupervisor} onDeleteSupervisor={deleteSupervisor}/>
+        )}
+        {vista==='superadmin' && esSuperAdmin && (
+          <VistaSuperAdmin/>
         )}
         {vista==='eval' && periodo && (
           <VistaCapturaManual periodo={periodo} collaborators={visibleCollaborators} evaluations={visibleEvaluations}
@@ -1896,6 +1914,90 @@ const VistaUsuarios = ({usuarios, supervisores, areas, currentUid, onSaveSupervi
           leer o escribir toda la base de datos). Si necesitas aislamiento real por área, avísame para construir
           el nivel de reglas con roles verificados en el servidor.
         </p>
+      </div>
+    </section>
+  );
+};
+
+const VistaSuperAdmin = () => {
+  const [entidadId, setEntidadId] = useState('');
+  const [nombre, setNombre] = useState('');
+  const [correo, setCorreo] = useState('');
+  const [clave, setClave] = useState('');
+  const [busyCrear, setBusyCrear] = useState(false);
+  const [msgCrear, setMsgCrear] = useState(null);
+
+  const [correoQuitar, setCorreoQuitar] = useState('');
+  const [busyQuitar, setBusyQuitar] = useState(false);
+  const [msgQuitar, setMsgQuitar] = useState(null);
+
+  const crear = async () => {
+    if(!entidadId.trim() || !correo.trim() || !clave){ showToast('Completa entidad, correo y contraseña'); return; }
+    setBusyCrear(true); setMsgCrear(null);
+    try{
+      const fn = firebase.functions().httpsCallable('crearAdminEntidad');
+      const res = await fn({email:correo.trim(), password:clave, entidadId:entidadId.trim(), nombre:nombre.trim()});
+      setMsgCrear({ok:true, texto:res.data.mensaje});
+      setCorreo(''); setClave(''); setNombre('');
+    }catch(e){
+      setMsgCrear({ok:false, texto:'Error: ' + e.message});
+    }
+    setBusyCrear(false);
+  };
+
+  const quitar = async () => {
+    if(!correoQuitar.trim()){ showToast('Escribe el correo'); return; }
+    setBusyQuitar(true); setMsgQuitar(null);
+    try{
+      const fn = firebase.functions().httpsCallable('quitarRestriccionAdmin');
+      const res = await fn({email:correoQuitar.trim()});
+      setMsgQuitar({ok:true, texto:res.data.mensaje});
+      setCorreoQuitar('');
+    }catch(e){
+      setMsgQuitar({ok:false, texto:'Error: ' + e.message});
+    }
+    setBusyQuitar(false);
+  };
+
+  return (
+    <section>
+      <div className="view-head">
+        <div>
+          <span className="eyebrow">Acceso entre entidades</span>
+          <h2>Súper admin</h2>
+          <p className="desc">
+            Crea cuentas de administrador restringidas a UNA sola entidad (ej. "fundacoofisam") — esa persona
+            podrá entrar como administrador completo ahí, pero quedará bloqueada en cualquier otro sitio de
+            entidad conectado a este mismo proyecto de Firebase. Esto llama a una función en la nube que
+            debe estar desplegada primero (ver functions/index.js) — si no lo está, vas a ver un error abajo.
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Crear o restringir un administrador</h3>
+        <div className="field-row three">
+          <div className="field"><label>Entidad (ENTIDAD_ID exacto)</label><input type="text" value={entidadId} onChange={e=>setEntidadId(e.target.value)} placeholder="fundacoofisam"/></div>
+          <div className="field"><label>Nombre (opcional)</label><input type="text" value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Nombre y apellido"/></div>
+          <div className="field"><label>Correo de la cuenta</label><input type="email" value={correo} onChange={e=>setCorreo(e.target.value)} placeholder="correo@ejemplo.com"/></div>
+        </div>
+        <div className="field" style={{maxWidth:320}}>
+          <label>Contraseña (mínimo 6 caracteres)</label>
+          <input type="text" value={clave} onChange={e=>setClave(e.target.value)} placeholder="Contraseña temporal"/>
+        </div>
+        <button className="btn" onClick={crear} disabled={busyCrear}>{busyCrear ? 'Creando…' : 'Crear / restringir cuenta'}</button>
+        {msgCrear && <p className="hint" style={{color: msgCrear.ok ? 'var(--moss)' : 'var(--clay)', marginTop:10}}>{msgCrear.texto}</p>}
+      </div>
+
+      <div className="card" style={{marginTop:16}}>
+        <h3>Quitar la restricción de una cuenta</h3>
+        <p className="hint">La devuelve a "administrador general" — acceso a todas las entidades, como tus cuentas de siempre.</p>
+        <div className="field" style={{maxWidth:320}}>
+          <label>Correo de la cuenta</label>
+          <input type="email" value={correoQuitar} onChange={e=>setCorreoQuitar(e.target.value)} placeholder="correo@ejemplo.com"/>
+        </div>
+        <button className="btn secondary" onClick={quitar} disabled={busyQuitar}>{busyQuitar ? 'Actualizando…' : 'Quitar restricción'}</button>
+        {msgQuitar && <p className="hint" style={{color: msgQuitar.ok ? 'var(--moss)' : 'var(--clay)', marginTop:10}}>{msgQuitar.texto}</p>}
       </div>
     </section>
   );
