@@ -2264,9 +2264,30 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
   const [copiarDesde, setCopiarDesde] = useState('');
   const [quizFormFor, setQuizFormFor] = useState(null);
   const [editingPreguntaId, setEditingPreguntaId] = useState(null);
+  const [editingCuestionarioId, setEditingCuestionarioId] = useState(null);
   const isQuizComp = componente===QUIZ_COMPONENT;
 
   useEffect(()=>{ setNivel('general'); setArea(''); setCargo(''); setCargoLibre(''); setColaboradorSel(''); setCopiarDesde(''); }, [componente]);
+
+  const norm = (s)=>(s||'').trim().toLowerCase();
+  // Cada cuestionario ocupa un "lugar" único dentro de su componente: uno por
+  // persona (colaboradorId), uno por cargo exacto, uno por área, uno por
+  // categoría, o uno general. Si ya existe otro cuestionario del mismo
+  // componente ocupando exactamente ese mismo lugar, el que se creó primero
+  // es el único que en verdad se usa — el segundo queda guardado pero
+  // invisible para todos, sin ningún aviso. Por eso hay que bloquear el
+  // duplicado ANTES de crearlo, no después.
+  const slotDe = (q) => {
+    if(q.colaboradorId) return `colab:${q.colaboradorId}`;
+    if(q.cargo) return `cargo:${norm(q.cargo)}`;
+    if(q.area) return `area:${norm(q.area)}`;
+    if(q.categoria) return `cat:${q.categoria}`;
+    return 'general';
+  };
+  const buscarConflicto = (propuesto, excluirId) => {
+    const slotPropuesto = slotDe(propuesto);
+    return questionnaires.find(q => q.id!==excluirId && q.componente===propuesto.componente && slotDe(q)===slotPropuesto);
+  };
 
   const crear = async () => {
     if(!nombre.trim()){ showToast('Escribe un nombre para el cuestionario'); return; }
@@ -2275,6 +2296,18 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
     if(nivel==='cargo' && !(cargo==='__otro' ? cargoLibre.trim() : cargo)){ showToast('Selecciona o escribe el cargo'); return; }
     const id = 'q_' + Date.now();
     const cargoFinal = cargo==='__otro' ? cargoLibre.trim() : cargo;
+    const propuesto = {id, componente, area:'', cargo:'', categoria:'', colaboradorId:''};
+    if(nivel==='colaborador') propuesto.colaboradorId = colaboradorSel;
+    else if(isQuizComp && nivel==='area') propuesto.area = area;
+    else if(nivel==='cargo') propuesto.cargo = cargoFinal;
+    else if(!isQuizComp && nivel==='categoria') propuesto.categoria = categoriaSel;
+
+    const conflicto = buscarConflicto(propuesto, null);
+    if(conflicto){
+      showToast(`Ya existe "${conflicto.nombre}" ocupando ese mismo lugar — edítalo en vez de crear otro, o el nuevo quedaría sin usarse.`);
+      return;
+    }
+
     let preguntas = [];
     if(copiarDesde){
       const fuente = questionnaires.find(q=>q.id===copiarDesde);
@@ -2285,11 +2318,7 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
         preguntas = fuente.preguntas.map(p=>({...p, id:'p_'+Date.now()+Math.random().toString(36).slice(2,6)}));
       }
     }
-    const data = {id, componente, nombre:nombre.trim(), preguntas, area:'', cargo:'', categoria:'', colaboradorId:''};
-    if(nivel==='colaborador') data.colaboradorId = colaboradorSel;
-    else if(isQuizComp && nivel==='area') data.area = area;
-    else if(nivel==='cargo') data.cargo = cargoFinal;
-    else if(!isQuizComp && nivel==='categoria') data.categoria = categoriaSel;
+    const data = {...propuesto, nombre:nombre.trim(), preguntas};
     await onSave(data);
     setNombre(''); setArea(''); setCargo(''); setCargoLibre(''); setColaboradorSel(''); setCopiarDesde(''); setNivel('general');
     showToast(preguntas.length ? `Cuestionario creado con ${preguntas.length} preguntas copiadas — ya puedes editarlas` : 'Cuestionario creado — ahora agrégale preguntas');
@@ -2309,6 +2338,18 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
     await onSave(next);
     setEditingPreguntaId(null);
     showToast('Pregunta actualizada');
+  };
+  const editarCuestionario = async (q, datos) => {
+    const propuesto = {...q, ...datos};
+    const conflicto = buscarConflicto(propuesto, q.id);
+    if(conflicto){
+      showToast(`Ya existe "${conflicto.nombre}" ocupando ese mismo lugar — no puedes dejar dos cuestionarios en el mismo sitio.`);
+      return false;
+    }
+    await onSave(propuesto);
+    setEditingCuestionarioId(null);
+    showToast('Cuestionario actualizado');
+    return true;
   };
   const agregarPreguntaQuiz = async (q, texto, opciones, correcta) => {
     if(!texto.trim() || opciones.some(o=>!o.trim())) { showToast('Completa la pregunta y las 4 opciones'); return; }
@@ -2443,16 +2484,26 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
               <h4 style={{fontFamily:'var(--font-display)', fontSize:13, margin:'14px 0 8px', color:'var(--ink-soft)'}}>{comp.label}</h4>
               {items.map(q=>(
                 <div className="q-card" key={q.id}>
-                  <div className="q-card-head">
-                    <div>
-                      <h4>{q.nombre}</h4>
-                      <div className="q-card-meta">
-                        {metaLabel(q, isQuiz)}
-                        {' '}· {q.preguntas.length} preguntas
+                  {editingCuestionarioId===q.id ? (
+                    <EditarCuestionarioForm q={q} areas={areas} cargos={cargos} collaborators={collaborators}
+                      isQuizComp={comp.key===QUIZ_COMPONENT}
+                      onSave={(datos)=>editarCuestionario(q, datos)}
+                      onCancel={()=>setEditingCuestionarioId(null)}/>
+                  ) : (
+                    <div className="q-card-head">
+                      <div>
+                        <h4>{q.nombre}</h4>
+                        <div className="q-card-meta">
+                          {metaLabel(q, isQuiz)}
+                          {' '}· {q.preguntas.length} preguntas
+                        </div>
+                      </div>
+                      <div style={{display:'flex', gap:4}}>
+                        <button className="btn ghost small" onClick={()=>setEditingCuestionarioId(q.id)}>Editar</button>
+                        <button className="btn ghost small" onClick={()=>onDelete(q.id)}>Eliminar</button>
                       </div>
                     </div>
-                    <button className="btn ghost small" onClick={()=>onDelete(q.id)}>Eliminar</button>
-                  </div>
+                  )}
                   <div className="q-list">
                     {q.preguntas.map(p=>(
                       <div className="q-list-item" key={p.id} style={editingPreguntaId===p.id ? {flexDirection:'column', alignItems:'stretch'} : undefined}>
@@ -2596,6 +2647,97 @@ const QuizEditForm = ({pregunta, onSave, onCancel}) => {
           if(!texto.trim() || opciones.some(o=>!o.trim())){ showToast('Completa la pregunta y las 4 opciones'); return; }
           onSave({texto:texto.trim(), opciones, correcta});
         }}>Guardar cambios</button>
+        <button className="btn ghost small" onClick={onCancel}>Cancelar</button>
+      </div>
+    </div>
+  );
+};
+
+// Edita el ENCABEZADO de un cuestionario ya creado: su nombre y a quién
+// aplica (general / área / cargo / grupo / una sola persona) — para poder
+// corregir la clasificación sin borrar las preguntas que ya tiene.
+const EditarCuestionarioForm = ({q, areas, cargos, collaborators, isQuizComp, onSave, onCancel}) => {
+  const nivelInicial = q.colaboradorId ? 'colaborador' : q.cargo ? 'cargo' : q.area ? 'area' : q.categoria ? 'categoria' : 'general';
+  const [nombre, setNombre] = useState(q.nombre);
+  const [nivel, setNivel] = useState(nivelInicial);
+  const [area, setArea] = useState(q.area||'');
+  const [cargo, setCargo] = useState(q.cargo||'');
+  const [cargoLibre, setCargoLibre] = useState('');
+  const [categoriaSel, setCategoriaSel] = useState(q.categoria||CATEGORIES[0].key);
+  const [colaboradorSel, setColaboradorSel] = useState(q.colaboradorId||'');
+  const [guardando, setGuardando] = useState(false);
+
+  const guardar = async () => {
+    if(!nombre.trim()){ showToast('Escribe un nombre para el cuestionario'); return; }
+    if(nivel==='colaborador' && !colaboradorSel){ showToast('Selecciona el colaborador'); return; }
+    if(nivel==='area' && !area){ showToast('Selecciona el área'); return; }
+    if(nivel==='cargo' && !(cargo==='__otro' ? cargoLibre.trim() : cargo)){ showToast('Selecciona o escribe el cargo'); return; }
+    const cargoFinal = cargo==='__otro' ? cargoLibre.trim() : cargo;
+    const datos = {nombre:nombre.trim(), area:'', cargo:'', categoria:'', colaboradorId:''};
+    if(nivel==='colaborador') datos.colaboradorId = colaboradorSel;
+    else if(isQuizComp && nivel==='area') datos.area = area;
+    else if(nivel==='cargo') datos.cargo = cargoFinal;
+    else if(!isQuizComp && nivel==='categoria') datos.categoria = categoriaSel;
+    setGuardando(true);
+    const ok = await onSave(datos);
+    setGuardando(false);
+  };
+
+  return (
+    <div style={{width:'100%'}}>
+      <div className="field-row three">
+        <div className="field"><label>Nombre</label><input type="text" value={nombre} onChange={e=>setNombre(e.target.value)} autoFocus/></div>
+        <div className="field">
+          <label>Aplica a</label>
+          <select value={nivel} onChange={e=>setNivel(e.target.value)}>
+            <option value="general">General — {isQuizComp?'todas las áreas y cargos':'todos los cargos'}</option>
+            {isQuizComp && <option value="cargo">Un cargo específico</option>}
+            {isQuizComp && <option value="area">Un área específica</option>}
+            {!isQuizComp && <option value="categoria">Un grupo (ej. todos los líderes)</option>}
+            {!isQuizComp && <option value="cargo">Un cargo específico</option>}
+            <option value="colaborador">Una sola persona</option>
+          </select>
+        </div>
+        {nivel==='area' && isQuizComp && (
+          <div className="field">
+            <label>Área</label>
+            <select value={area} onChange={e=>setArea(e.target.value)}>
+              <option value="">Selecciona un área</option>
+              {(areas||[]).map(a=><option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+        )}
+        {nivel==='cargo' && (
+          <div className="field">
+            <label>Cargo</label>
+            <select value={cargo} onChange={e=>setCargo(e.target.value)}>
+              <option value="">Selecciona un cargo</option>
+              {(cargos||[]).map(c=><option key={c} value={c}>{c}</option>)}
+              <option value="__otro">+ Otro cargo (escribir)</option>
+            </select>
+            {cargo==='__otro' && <input type="text" style={{marginTop:8}} value={cargoLibre} onChange={e=>setCargoLibre(e.target.value)} placeholder="Nombre exacto del cargo"/>}
+          </div>
+        )}
+        {nivel==='categoria' && !isQuizComp && (
+          <div className="field">
+            <label>Grupo</label>
+            <select value={categoriaSel} onChange={e=>setCategoriaSel(e.target.value)}>
+              {CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+        )}
+        {nivel==='colaborador' && (
+          <div className="field">
+            <label>Colaborador</label>
+            <select value={colaboradorSel} onChange={e=>setColaboradorSel(e.target.value)}>
+              <option value="">Selecciona un colaborador</option>
+              {(collaborators||[]).map(c=><option key={c.id} value={c.id}>{c.nombre}{c.cargo?' — '+c.cargo:''}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+      <div style={{display:'flex', gap:8}}>
+        <button className="btn small" onClick={guardar} disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar cambios'}</button>
         <button className="btn ghost small" onClick={onCancel}>Cancelar</button>
       </div>
     </div>
