@@ -642,7 +642,8 @@ function getQuestionnaireFor(questionnaires, componente, collaborator){
 // - Habilidades blandas / core / productividad: el promedio de CADA pregunta,
 //   juntando las respuestas de TODOS los evaluadores externos (todo rol menos
 //   autoevaluación) — nunca una respuesta individual — y se marca si ese
-//   promedio quedó por debajo de 3 (sobre 5).
+//   promedio quedó por debajo de 4 (sobre 5) — 3.5 o 3.7 siguen siendo
+//   "regular", no "bueno".
 function areasDeMejora(collab, evaluations, questionnaires){
   const answerKey = (compKey, qid) => compKey+'::'+qid;
   const propias = evaluations.filter(e=>e.collaboratorId===collab.id);
@@ -696,7 +697,7 @@ function areasDeMejora(collab, evaluations, questionnaires){
     const comp = COMPONENTS.find(c=>c.key===compKey);
     const item = {texto:p.texto, promedio:prom, componente:comp ? comp.label : compKey, evaluadores:vals.length};
     todos.push(item);
-    if(prom < 3) comportamiento.push(item);
+    if(prom < 4) comportamiento.push(item);
   });
 
   return {quiz, comportamiento, todos};
@@ -3642,7 +3643,7 @@ const VistaResultados = ({periodo, collaborators, evaluations, questionnaires}) 
       if(mejora.comportamiento.length>0 || mejora.quiz.length>0){
         children.push(new Paragraph({text:''}));
         children.push(new Paragraph({text:'Áreas para plan de acción', heading:HeadingLevel.HEADING_2}));
-        children.push(new Paragraph({text:'Promedio entre todos los evaluadores externos que calificaron cada afirmación — no se identifica quién dio cada calificación.', italics:true}));
+        children.push(new Paragraph({text:'Promedio entre todos los evaluadores externos que calificaron cada afirmación (por debajo de 4 sobre 5) — no se identifica quién dio cada calificación.', italics:true}));
         mejora.comportamiento.forEach(m=>{
           children.push(new Paragraph({text:`${m.componente} — ${m.texto} (promedio ${m.promedio.toFixed(1)})`, bullet:{level:0}}));
         });
@@ -3889,7 +3890,7 @@ const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
         <div style={{marginTop:20, paddingTop:16, borderTop:'1px solid var(--border)'}}>
           <h4 style={{margin:'0 0 4px', fontFamily:'var(--font-display)', color:'var(--clay)'}}>Áreas para plan de acción</h4>
           <p className="hint" style={{marginTop:0}}>
-            Promedio entre todos los evaluadores externos que calificaron cada afirmación — nunca una respuesta individual.
+            Promedio entre todos los evaluadores externos que calificaron cada afirmación (por debajo de 4 sobre 5) — nunca una respuesta individual.
           </p>
           {mejora.comportamiento.length>0 && (
             <ul style={{margin:'0 0 12px', paddingLeft:20, fontSize:13}}>
@@ -3919,7 +3920,7 @@ const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
           ) : (
             <>
               <p className="hint" style={{marginTop:0}}>
-                Ninguna afirmación promedió por debajo de 3 — por eso no hay nada que listar aquí. Detalle de los promedios reales, para verificar:
+                Ninguna afirmación promedió por debajo de 4 — por eso no hay nada que listar aquí. Detalle de los promedios reales, para verificar:
               </p>
               <ul style={{margin:0, paddingLeft:20, fontSize:12, color:'var(--ink-soft)'}}>
                 {mejora.todos.map((m,i)=>(
