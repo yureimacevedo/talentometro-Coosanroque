@@ -647,13 +647,29 @@ function areasDeMejora(collab, evaluations, questionnaires){
   const answerKey = (compKey, qid) => compKey+'::'+qid;
   const propias = evaluations.filter(e=>e.collaboratorId===collab.id);
 
+  // Busca una pregunta por su id en CUALQUIER cuestionario de ese componente
+  // (no solo el que "hoy" aplicaría según cargo/área/categoría) — así, si el
+  // cuestionario se reclasificó o se editó después de que la gente ya
+  // respondió, esto sigue encontrando el texto de la pregunta que realmente
+  // se contestó, en vez de quedar en blanco por un desajuste de ids.
+  const buscarPregunta = (compKey, pid) => {
+    for(const q of questionnaires){
+      if(q.componente!==compKey) continue;
+      const p = q.preguntas.find(p=>p.id===pid);
+      if(p) return p;
+    }
+    return null;
+  };
+
   const quiz = [];
-  const qQuiz = getQuestionnaireFor(questionnaires, QUIZ_COMPONENT, collab);
   const autoeval = propias.find(e=>e.role==='autoevaluacion');
-  if(qQuiz && autoeval && autoeval.answers){
-    qQuiz.preguntas.forEach(p=>{
-      if(!p.opciones) return;
-      const dada = autoeval.answers[answerKey(QUIZ_COMPONENT, p.id)];
+  if(autoeval && autoeval.answers){
+    Object.keys(autoeval.answers).forEach(key=>{
+      const [compKey, pid] = key.split('::');
+      if(compKey!==QUIZ_COMPONENT) return;
+      const p = buscarPregunta(compKey, pid);
+      if(!p || !p.opciones) return;
+      const dada = autoeval.answers[key];
       if(dada!==undefined && dada!==p.correcta){
         quiz.push({texto:p.texto, tuRespuesta:p.opciones[dada], correcta:p.opciones[p.correcta]});
       }
@@ -661,18 +677,25 @@ function areasDeMejora(collab, evaluations, questionnaires){
   }
 
   const comportamiento = [];
-  COMPONENTS.filter(c=>c.key!==QUIZ_COMPONENT).forEach(comp=>{
-    const q = getQuestionnaireFor(questionnaires, comp.key, collab);
-    if(!q) return;
-    const externas = propias.filter(e=>e.role!=='autoevaluacion' && e.answers);
-    q.preguntas.forEach(p=>{
-      const vals = externas.map(e=>e.answers[answerKey(comp.key, p.id)]).filter(v=>v!==undefined);
-      if(vals.length===0) return;
-      const prom = vals.reduce((a,b)=>a+b,0)/vals.length;
-      if(prom < 3){
-        comportamiento.push({texto:p.texto, promedio:prom, componente:comp.label});
-      }
+  const externas = propias.filter(e=>e.role!=='autoevaluacion' && e.answers);
+  const vistos = {}; // agrupa por "compKey::pid" para promediar entre evaluadores
+  externas.forEach(e=>{
+    Object.keys(e.answers).forEach(key=>{
+      const [compKey] = key.split('::');
+      if(compKey===QUIZ_COMPONENT) return; // el quiz no aplica a evaluación externa
+      if(!vistos[key]) vistos[key] = [];
+      vistos[key].push(e.answers[key]);
     });
+  });
+  Object.entries(vistos).forEach(([key, vals])=>{
+    const [compKey, pid] = key.split('::');
+    const p = buscarPregunta(compKey, pid);
+    if(!p) return;
+    const prom = vals.reduce((a,b)=>a+b,0)/vals.length;
+    if(prom < 3){
+      const comp = COMPONENTS.find(c=>c.key===compKey);
+      comportamiento.push({texto:p.texto, promedio:prom, componente:comp ? comp.label : compKey});
+    }
   });
 
   return {quiz, comportamiento};
