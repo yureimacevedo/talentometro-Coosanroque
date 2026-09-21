@@ -597,19 +597,27 @@ function getQuestionnaireFor(questionnaires, componente, collaborator){
     if(porColaborador) return porColaborador;
   }
   if(componente === QUIZ_COMPONENT){
-    // Conocimientos básicos: puede ser igual para todos (general), variar por
-    // cargo, o variar por área — en ese orden de prioridad si hay varios.
+    // Conocimientos básicos: las preguntas GENERALES (las que aplican a todos)
+    // siempre se incluyen como base. Si además existe un cuestionario propio
+    // del cargo (o, si no hay de cargo, del área) de esta persona, sus
+    // preguntas se AGREGAN a las generales — no la reemplazan — para que el
+    // quiz final tenga tanto lo común a todos como lo específico de su cargo.
+    const general = questionnaires.find(q=>q.componente===componente && !q.colaboradorId && !norm(q.cargo) && !norm(q.area));
+    let especifico = null;
     const cargoQ = collaborator ? collaborator.cargo : '';
     if(cargoQ){
-      const porCargoQ = questionnaires.find(q=>q.componente===componente && !q.colaboradorId && norm(q.cargo)===norm(cargoQ));
-      if(porCargoQ) return porCargoQ;
+      especifico = questionnaires.find(q=>q.componente===componente && !q.colaboradorId && norm(q.cargo)===norm(cargoQ)) || null;
     }
-    const area = collaborator ? collaborator.area : '';
-    if(area){
-      const specific = questionnaires.find(q=>q.componente===componente && !q.colaboradorId && !norm(q.cargo) && norm(q.area)===norm(area));
-      if(specific) return specific;
+    if(!especifico){
+      const area = collaborator ? collaborator.area : '';
+      if(area){
+        especifico = questionnaires.find(q=>q.componente===componente && !q.colaboradorId && !norm(q.cargo) && norm(q.area)===norm(area)) || null;
+      }
     }
-    return questionnaires.find(q=>q.componente===componente && !q.colaboradorId && !norm(q.cargo) && !norm(q.area)) || null;
+    if(especifico && general){
+      return {...especifico, preguntas:[...general.preguntas, ...especifico.preguntas]};
+    }
+    return especifico || general || null;
   }
   // Habilidades blandas, habilidades core y productividad: cargo específico > categoría (ej. "líder") > general.
   const cargo = collaborator ? collaborator.cargo : '';
@@ -2486,7 +2494,6 @@ const VistaCuestionarios = ({questionnaires, areas, cargos, collaborators, onSav
                 <div className="q-card" key={q.id}>
                   {editingCuestionarioId===q.id ? (
                     <EditarCuestionarioForm q={q} areas={areas} cargos={cargos} collaborators={collaborators}
-                      isQuizComp={comp.key===QUIZ_COMPONENT}
                       onSave={(datos)=>editarCuestionario(q, datos)}
                       onCancel={()=>setEditingCuestionarioId(null)}/>
                   ) : (
@@ -2656,9 +2663,10 @@ const QuizEditForm = ({pregunta, onSave, onCancel}) => {
 // Edita el ENCABEZADO de un cuestionario ya creado: su nombre y a quién
 // aplica (general / área / cargo / grupo / una sola persona) — para poder
 // corregir la clasificación sin borrar las preguntas que ya tiene.
-const EditarCuestionarioForm = ({q, areas, cargos, collaborators, isQuizComp, onSave, onCancel}) => {
+const EditarCuestionarioForm = ({q, areas, cargos, collaborators, onSave, onCancel}) => {
   const nivelInicial = q.colaboradorId ? 'colaborador' : q.cargo ? 'cargo' : q.area ? 'area' : q.categoria ? 'categoria' : 'general';
   const [nombre, setNombre] = useState(q.nombre);
+  const [componente, setComponente] = useState(q.componente);
   const [nivel, setNivel] = useState(nivelInicial);
   const [area, setArea] = useState(q.area||'');
   const [cargo, setCargo] = useState(q.cargo||'');
@@ -2666,6 +2674,16 @@ const EditarCuestionarioForm = ({q, areas, cargos, collaborators, isQuizComp, on
   const [categoriaSel, setCategoriaSel] = useState(q.categoria||CATEGORIES[0].key);
   const [colaboradorSel, setColaboradorSel] = useState(q.colaboradorId||'');
   const [guardando, setGuardando] = useState(false);
+  const isQuizComp = componente===QUIZ_COMPONENT;
+
+  const cambiarComponente = (nuevo) => {
+    setComponente(nuevo);
+    // Al cambiar de componente, "área" solo existe para el quiz y "grupo"
+    // solo para los demás — si el nivel actual ya no aplica, vuelve a general
+    // en vez de dejar guardado un nivel que no tendría sentido para el nuevo.
+    const seraQuiz = nuevo===QUIZ_COMPONENT;
+    if((nivel==='area' && !seraQuiz) || (nivel==='categoria' && seraQuiz)) setNivel('general');
+  };
 
   const guardar = async () => {
     if(!nombre.trim()){ showToast('Escribe un nombre para el cuestionario'); return; }
@@ -2673,7 +2691,7 @@ const EditarCuestionarioForm = ({q, areas, cargos, collaborators, isQuizComp, on
     if(nivel==='area' && !area){ showToast('Selecciona el área'); return; }
     if(nivel==='cargo' && !(cargo==='__otro' ? cargoLibre.trim() : cargo)){ showToast('Selecciona o escribe el cargo'); return; }
     const cargoFinal = cargo==='__otro' ? cargoLibre.trim() : cargo;
-    const datos = {nombre:nombre.trim(), area:'', cargo:'', categoria:'', colaboradorId:''};
+    const datos = {nombre:nombre.trim(), componente, area:'', cargo:'', categoria:'', colaboradorId:''};
     if(nivel==='colaborador') datos.colaboradorId = colaboradorSel;
     else if(isQuizComp && nivel==='area') datos.area = area;
     else if(nivel==='cargo') datos.cargo = cargoFinal;
@@ -2687,6 +2705,12 @@ const EditarCuestionarioForm = ({q, areas, cargos, collaborators, isQuizComp, on
     <div style={{width:'100%'}}>
       <div className="field-row three">
         <div className="field"><label>Nombre</label><input type="text" value={nombre} onChange={e=>setNombre(e.target.value)} autoFocus/></div>
+        <div className="field">
+          <label>Componente</label>
+          <select value={componente} onChange={e=>cambiarComponente(e.target.value)}>
+            {COMPONENTS.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>
+        </div>
         <div className="field">
           <label>Aplica a</label>
           <select value={nivel} onChange={e=>setNivel(e.target.value)}>
