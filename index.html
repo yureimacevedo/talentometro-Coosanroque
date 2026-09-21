@@ -677,6 +677,7 @@ function areasDeMejora(collab, evaluations, questionnaires){
   }
 
   const comportamiento = [];
+  const todos = [];
   const externas = propias.filter(e=>e.role!=='autoevaluacion' && e.answers);
   const vistos = {}; // agrupa por "compKey::pid" para promediar entre evaluadores
   externas.forEach(e=>{
@@ -692,13 +693,13 @@ function areasDeMejora(collab, evaluations, questionnaires){
     const p = buscarPregunta(compKey, pid);
     if(!p) return;
     const prom = vals.reduce((a,b)=>a+b,0)/vals.length;
-    if(prom < 3){
-      const comp = COMPONENTS.find(c=>c.key===compKey);
-      comportamiento.push({texto:p.texto, promedio:prom, componente:comp ? comp.label : compKey});
-    }
+    const comp = COMPONENTS.find(c=>c.key===compKey);
+    const item = {texto:p.texto, promedio:prom, componente:comp ? comp.label : compKey, evaluadores:vals.length};
+    todos.push(item);
+    if(prom < 3) comportamiento.push(item);
   });
 
-  return {quiz, comportamiento};
+  return {quiz, comportamiento, todos};
 }
 
 /* =========================================================
@@ -3884,7 +3885,7 @@ const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
         </div>
       </div>
 
-      {(mejora.comportamiento.length>0 || mejora.quiz.length>0) && (
+      {(mejora.comportamiento.length>0 || mejora.quiz.length>0) ? (
         <div style={{marginTop:20, paddingTop:16, borderTop:'1px solid var(--border)'}}>
           <h4 style={{margin:'0 0 4px', fontFamily:'var(--font-display)', color:'var(--clay)'}}>Áreas para plan de acción</h4>
           <p className="hint" style={{marginTop:0}}>
@@ -3903,6 +3904,26 @@ const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
               <ul style={{margin:0, paddingLeft:20, fontSize:13}}>
                 {mejora.quiz.map((m,i)=>(
                   <li key={i} style={{marginBottom:4}}>{m.texto} — respondió "{m.tuRespuesta}", la correcta es "{m.correcta}"</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      ) : (
+        <div style={{marginTop:20, paddingTop:16, borderTop:'1px solid var(--border)'}}>
+          <h4 style={{margin:'0 0 4px', fontFamily:'var(--font-display)'}}>Áreas para plan de acción</h4>
+          {mejora.todos.length===0 ? (
+            <p className="hint" style={{marginTop:0}}>
+              No se encontró ninguna respuesta por pregunta guardada para esta persona (ni de evaluadores externos, ni de su propio quiz) — puede ser que todavía no la hayan evaluado, o que las respuestas se hayan guardado de otra forma. Esto sí sería motivo para revisar.
+            </p>
+          ) : (
+            <>
+              <p className="hint" style={{marginTop:0}}>
+                Ninguna afirmación promedió por debajo de 3 — por eso no hay nada que listar aquí. Detalle de los promedios reales, para verificar:
+              </p>
+              <ul style={{margin:0, paddingLeft:20, fontSize:12, color:'var(--ink-soft)'}}>
+                {mejora.todos.map((m,i)=>(
+                  <li key={i} style={{marginBottom:3}}><span style={{fontFamily:'var(--font-mono)', fontSize:10.5}}>{m.componente}</span> · {m.texto} — promedio {m.promedio.toFixed(1)} ({m.evaluadores} evaluador{m.evaluadores===1?'':'es'})</li>
                 ))}
               </ul>
             </>
