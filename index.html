@@ -634,6 +634,50 @@ function getQuestionnaireFor(questionnaires, componente, collaborator){
   return questionnaires.find(q=>q.componente===componente && !q.colaboradorId && !norm(q.cargo) && !q.categoria) || null;
 }
 
+// Áreas de mejora, pregunta por pregunta — para el plan de acción, sin decir
+// quién calificó qué:
+// - Conocimientos básicos: las preguntas del quiz que la propia persona
+//   respondió mal en su autoevaluación (no hay tema de anonimato: es su propia
+//   respuesta), con la opción correcta para que sepa qué reforzar.
+// - Habilidades blandas / core / productividad: el promedio de CADA pregunta,
+//   juntando las respuestas de TODOS los evaluadores externos (todo rol menos
+//   autoevaluación) — nunca una respuesta individual — y se marca si ese
+//   promedio quedó por debajo de 3 (sobre 5).
+function areasDeMejora(collab, evaluations, questionnaires){
+  const answerKey = (compKey, qid) => compKey+'::'+qid;
+  const propias = evaluations.filter(e=>e.collaboratorId===collab.id);
+
+  const quiz = [];
+  const qQuiz = getQuestionnaireFor(questionnaires, QUIZ_COMPONENT, collab);
+  const autoeval = propias.find(e=>e.role==='autoevaluacion');
+  if(qQuiz && autoeval && autoeval.answers){
+    qQuiz.preguntas.forEach(p=>{
+      if(!p.opciones) return;
+      const dada = autoeval.answers[answerKey(QUIZ_COMPONENT, p.id)];
+      if(dada!==undefined && dada!==p.correcta){
+        quiz.push({texto:p.texto, tuRespuesta:p.opciones[dada], correcta:p.opciones[p.correcta]});
+      }
+    });
+  }
+
+  const comportamiento = [];
+  COMPONENTS.filter(c=>c.key!==QUIZ_COMPONENT).forEach(comp=>{
+    const q = getQuestionnaireFor(questionnaires, comp.key, collab);
+    if(!q) return;
+    const externas = propias.filter(e=>e.role!=='autoevaluacion' && e.answers);
+    q.preguntas.forEach(p=>{
+      const vals = externas.map(e=>e.answers[answerKey(comp.key, p.id)]).filter(v=>v!==undefined);
+      if(vals.length===0) return;
+      const prom = vals.reduce((a,b)=>a+b,0)/vals.length;
+      if(prom < 3){
+        comportamiento.push({texto:p.texto, promedio:prom, componente:comp.label});
+      }
+    });
+  });
+
+  return {quiz, comportamiento};
+}
+
 /* =========================================================
    TOAST (global, simple)
    ========================================================= */
@@ -1526,7 +1570,7 @@ const AdminApp = ({user, marca}) => {
             onSave={saveEvaluation} onDelete={deleteEvaluation}/>
         )}
         {vista==='results' && periodo && (
-          <VistaResultados periodo={periodo} collaborators={visibleCollaborators} evaluations={visibleEvaluations}/>
+          <VistaResultados periodo={periodo} collaborators={visibleCollaborators} evaluations={visibleEvaluations} questionnaires={questionnaires}/>
         )}
       </main>
     </div>
@@ -3419,7 +3463,7 @@ const ManualRoleBlock = ({roleKey, roleWeights, periodo, collab, evaluations, on
 /* =========================================================
    VISTA: RESULTADOS
    ========================================================= */
-const VistaResultados = ({periodo, collaborators, evaluations}) => {
+const VistaResultados = ({periodo, collaborators, evaluations, questionnaires}) => {
   const [selectedId, setSelectedId] = useState(null);
   const scoreConfig = periodo.scoreConfig || defaultScoreConfig();
 
@@ -3570,6 +3614,23 @@ const VistaResultados = ({periodo, collaborators, evaluations}) => {
       ]}));
       children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE}, rows:[compHeaderRow, ...compDataRows]}));
 
+      const mejora = areasDeMejora(p, evaluations, questionnaires||[]);
+      if(mejora.comportamiento.length>0 || mejora.quiz.length>0){
+        children.push(new Paragraph({text:''}));
+        children.push(new Paragraph({text:'Áreas para plan de acción', heading:HeadingLevel.HEADING_2}));
+        children.push(new Paragraph({text:'Promedio entre todos los evaluadores externos que calificaron cada afirmación — no se identifica quién dio cada calificación.', italics:true}));
+        mejora.comportamiento.forEach(m=>{
+          children.push(new Paragraph({text:`${m.componente} — ${m.texto} (promedio ${m.promedio.toFixed(1)})`, bullet:{level:0}}));
+        });
+        if(mejora.quiz.length>0){
+          children.push(new Paragraph({text:''}));
+          children.push(new Paragraph({text:'Conocimientos básicos — preguntas a repasar:', bold:true}));
+          mejora.quiz.forEach(m=>{
+            children.push(new Paragraph({text:`${m.texto} — respondió "${m.tuRespuesta}", la correcta es "${m.correcta}"`, bullet:{level:0}}));
+          });
+        }
+      }
+
       const blob = await Packer.toBlob(new Document({sections:[{children}]}));
       const arrayBuffer = await blob.arrayBuffer();
       zip.file(nombreArchivoUnico(p.nombre, nombresUsados) + '.docx', arrayBuffer);
@@ -3657,7 +3718,7 @@ const VistaResultados = ({periodo, collaborators, evaluations}) => {
                 <div className="score-num">{fs.score!==null?fs.score.toFixed(1):'—'}</div>
                 <div style={{textAlign:'center', color:'var(--ink-faint)'}}>{open?'⌃':'›'}</div>
               </div>
-              {open && <ResultDetail p={p} fs={fs} periodo={periodo} evaluations={evaluations}/>}
+              {open && <ResultDetail p={p} fs={fs} periodo={periodo} evaluations={evaluations} questionnaires={questionnaires}/>}
             </div>
           );
         })}
@@ -3760,8 +3821,9 @@ const VistaResultados = ({periodo, collaborators, evaluations}) => {
   );
 };
 
-const ResultDetail = ({p, fs, periodo, evaluations}) => {
+const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
   const breakdown = componentBreakdownFor(p, periodo.evaluatorWeights, periodo.componentWeights, evaluations, periodo.componentWeightsByCategoria);
+  const mejora = areasDeMejora(p, evaluations, questionnaires||[]);
 
   return (
     <div className="detail-panel">
@@ -3798,6 +3860,32 @@ const ResultDetail = ({p, fs, periodo, evaluations}) => {
           })}
         </div>
       </div>
+
+      {(mejora.comportamiento.length>0 || mejora.quiz.length>0) && (
+        <div style={{marginTop:20, paddingTop:16, borderTop:'1px solid var(--border)'}}>
+          <h4 style={{margin:'0 0 4px', fontFamily:'var(--font-display)', color:'var(--clay)'}}>Áreas para plan de acción</h4>
+          <p className="hint" style={{marginTop:0}}>
+            Promedio entre todos los evaluadores externos que calificaron cada afirmación — nunca una respuesta individual.
+          </p>
+          {mejora.comportamiento.length>0 && (
+            <ul style={{margin:'0 0 12px', paddingLeft:20, fontSize:13}}>
+              {mejora.comportamiento.map((m,i)=>(
+                <li key={i} style={{marginBottom:4}}><span style={{color:'var(--ink-faint)', fontFamily:'var(--font-mono)', fontSize:11}}>{m.componente}</span> · {m.texto} — promedio {m.promedio.toFixed(1)}</li>
+              ))}
+            </ul>
+          )}
+          {mejora.quiz.length>0 && (
+            <>
+              <div style={{fontSize:12.5, fontWeight:600, marginBottom:4}}>Conocimientos básicos — preguntas a repasar</div>
+              <ul style={{margin:0, paddingLeft:20, fontSize:13}}>
+                {mejora.quiz.map((m,i)=>(
+                  <li key={i} style={{marginBottom:4}}>{m.texto} — respondió "{m.tuRespuesta}", la correcta es "{m.correcta}"</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };
