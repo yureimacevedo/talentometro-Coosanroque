@@ -3640,9 +3640,9 @@ const VistaResultados = ({periodo, collaborators, evaluations, questionnaires}) 
       children.push(new Table({width:{size:100,type:WidthType.PERCENTAGE}, rows:[compHeaderRow, ...compDataRows]}));
 
       const mejora = areasDeMejora(p, evaluations, questionnaires||[]);
+      children.push(new Paragraph({text:''}));
+      children.push(new Paragraph({text:'Áreas para plan de acción', heading:HeadingLevel.HEADING_2}));
       if(mejora.comportamiento.length>0 || mejora.quiz.length>0){
-        children.push(new Paragraph({text:''}));
-        children.push(new Paragraph({text:'Áreas para plan de acción', heading:HeadingLevel.HEADING_2}));
         children.push(new Paragraph({text:'Promedio entre todos los evaluadores externos que calificaron cada afirmación (por debajo de 4 sobre 5) — no se identifica quién dio cada calificación.', italics:true}));
         mejora.comportamiento.forEach(m=>{
           children.push(new Paragraph({text:`${m.componente} — ${m.texto} (promedio ${m.promedio.toFixed(1)})`, bullet:{level:0}}));
@@ -3654,6 +3654,20 @@ const VistaResultados = ({periodo, collaborators, evaluations, questionnaires}) 
             children.push(new Paragraph({text:`${m.texto} — respondió "${m.tuRespuesta}", la correcta es "${m.correcta}"`, bullet:{level:0}}));
           });
         }
+      } else if(mejora.todos.length===0){
+        children.push(new Paragraph({text:'No se encontró ninguna respuesta por pregunta guardada para esta persona.', italics:true}));
+      } else {
+        children.push(new Paragraph({text:'Ninguna afirmación promedió por debajo de 4 — no hay nada que listar aquí.', italics:true}));
+      }
+      if(mejora.todos.length>0){
+        children.push(new Paragraph({text:''}));
+        children.push(new Paragraph({text:`Detalle completo de las ${mejora.todos.length} afirmaciones evaluadas (para verificar el cálculo)`, bold:true, size:18}));
+        mejora.todos.forEach(m=>{
+          children.push(new Paragraph({
+            text:`${m.componente} — ${m.texto} — promedio ${m.promedio.toFixed(1)} (${m.evaluadores} evaluador${m.evaluadores===1?'':'es'})`,
+            bullet:{level:0}, size:18
+          }));
+        });
       }
 
       const blob = await Packer.toBlob(new Document({sections:[{children}]}));
