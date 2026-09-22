@@ -3849,6 +3849,7 @@ const VistaResultados = ({periodo, collaborators, evaluations, questionnaires}) 
 const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
   const breakdown = componentBreakdownFor(p, periodo.evaluatorWeights, periodo.componentWeights, evaluations, periodo.componentWeightsByCategoria);
   const mejora = areasDeMejora(p, evaluations, questionnaires||[]);
+  const [verTodo, setVerTodo] = useState(false);
 
   return (
     <div className="detail-panel">
@@ -3907,6 +3908,20 @@ const ResultDetail = ({p, fs, periodo, evaluations, questionnaires}) => {
                   <li key={i} style={{marginBottom:4}}>{m.texto} — respondió "{m.tuRespuesta}", la correcta es "{m.correcta}"</li>
                 ))}
               </ul>
+            </>
+          )}
+          {mejora.todos.length>0 && (
+            <>
+              <button className="toggle-link" style={{fontSize:11.5, marginTop:4}} onClick={()=>setVerTodo(!verTodo)}>
+                {verTodo ? 'Ocultar' : 'Ver'} el detalle completo de las {mejora.todos.length} afirmaciones evaluadas (para verificar el cálculo)
+              </button>
+              {verTodo && (
+                <ul style={{margin:'8px 0 0', paddingLeft:20, fontSize:12, color:'var(--ink-soft)'}}>
+                  {mejora.todos.map((m,i)=>(
+                    <li key={i} style={{marginBottom:3}}><span style={{fontFamily:'var(--font-mono)', fontSize:10.5}}>{m.componente}</span> · {m.texto} — promedio {m.promedio.toFixed(1)} ({m.evaluadores} evaluador{m.evaluadores===1?'':'es'})</li>
+                  ))}
+                </ul>
+              )}
             </>
           )}
         </div>
