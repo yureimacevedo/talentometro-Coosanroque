@@ -935,16 +935,24 @@ const App = () => {
   useEffect(()=>{
     if(CONFIG_IS_PLACEHOLDER){ setLoading(false); return; }
     const unsub = auth.onAuthStateChanged(async (u)=>{
-      setUser(u);
       if(u && !u.isAnonymous){
         try{
           const ref = db.collection('usuarios').doc(u.uid);
           const snap = await ref.get();
           if(!snap.exists){
             await ref.set({email:u.email||'', rol:'admin', createdAt: FieldValueCompat.serverTimestamp()});
+          }else{
+            // Cuenta limitada a otra entidad: no se le permite entrar en esta.
+            const lim = snap.data().entidad;
+            if(lim && lim!==ENTIDAD_ID){
+              await auth.signOut();
+              showToast('Esta cuenta no tiene acceso a '+ENTIDAD_NOMBRE+'.');
+              setUser(null); setLoading(false); return;
+            }
           }
         }catch(e){ console.error(e); }
       }
+      setUser(u);
       setLoading(false);
     });
     return ()=>unsub();
@@ -1119,6 +1127,10 @@ const PortalApp = ({marca}) => {
     assignments.filter(a=>a.evaluadorId===u.id).forEach(a=>{
       const done = evaluations.some(e=>e.assignmentId===a.id);
       const evaluado = relevantCollaborators.find(c=>c.id===a.evaluadoId);
+      // Si el rol ya no está activo para la categoría de la persona evaluada
+      // (se desmarcó en Parametrización) y aún no se respondió, no se muestra.
+      const pesosEv = (config && config.evaluatorWeights && evaluado && config.evaluatorWeights[evaluado.categoria]) || null;
+      if(!done && pesosEv && !(a.role in pesosEv)) return;
       tasks.push({kind:'assigned', assignmentId:a.id, evaluadoId:a.evaluadoId, evaluadoNombre: evaluado?evaluado.nombre:'—', role:a.role, done});
     });
     return tasks;
@@ -1604,7 +1616,7 @@ const AdminApp = ({user, marca}) => {
             }}/>
         )}
         {vista==='usuarios' && periodo && !isSupervisor && (
-          <VistaUsuarios usuarios={usuarios} supervisores={supervisores} areas={areas} currentUid={user.uid}
+          <VistaUsuarios usuarios={usuarios} supervisores={supervisores} areas={areas} currentUid={user.uid} esSuperAdmin={esSuperAdmin}
             onSaveSupervisor={saveSupervisor} onDeleteSupervisor={deleteSupervisor}/>
         )}
         {vista==='superadmin' && esSuperAdmin && (
@@ -1924,7 +1936,13 @@ const VistaAreas = ({periodo, onSave}) => {
 /* =========================================================
    VISTA: USUARIOS (roles y alcance por área)
    ========================================================= */
-const VistaUsuarios = ({usuarios, supervisores, areas, currentUid, onSaveSupervisor, onDeleteSupervisor}) => {
+const VistaUsuarios = ({usuarios, supervisores, areas, currentUid, esSuperAdmin, onSaveSupervisor, onDeleteSupervisor}) => {
+  const limitarEntidad = async (u, limitar) => {
+    try{
+      await db.collection('usuarios').doc(u.id).update({entidad: limitar ? ENTIDAD_ID : firebase.firestore.FieldValue.delete()});
+      showToast(limitar ? (u.email||'La cuenta')+' ahora solo puede entrar a '+ENTIDAD_NOMBRE : (u.email||'La cuenta')+' ya no tiene límite de entidad');
+    }catch(e){ showToast('No se pudo cambiar: '+e.message); }
+  };
   const [editingUid, setEditingUid] = useState(null);
   const [draftAreas, setDraftAreas] = useState([]);
 
@@ -1976,6 +1994,7 @@ const VistaUsuarios = ({usuarios, supervisores, areas, currentUid, onSaveSupervi
                   <div className="collab-name">{u.email || u.id}{u.id===currentUid && <span className="tag" style={{marginLeft:6}}>Tú</span>}</div>
                   <div className="collab-meta">
                     {sup ? <span className="tag gold">Supervisor · {sup.areas.join(', ')}</span> : <span className="tag moss">Administrador general</span>}
+                    {u.entidad ? <span className="tag" style={{marginLeft:6}}>Solo {u.entidad}</span> : <span className="tag" style={{marginLeft:6}}>Todas las entidades</span>}
                   </div>
                 </div>
               </div>
@@ -1998,6 +2017,9 @@ const VistaUsuarios = ({usuarios, supervisores, areas, currentUid, onSaveSupervi
                   <>
                     <button className="btn secondary small" onClick={()=>startEdit(u)} disabled={areas.length===0}>Editar alcance</button>
                     {sup && <button className="btn ghost small" onClick={()=>quitarRestriccion(u)}>Quitar restricción</button>}
+                    {esSuperAdmin && (u.entidad===ENTIDAD_ID
+                      ? <button className="btn ghost small" onClick={()=>limitarEntidad(u,false)}>Quitar límite de entidad</button>
+                      : <button className="btn secondary small" onClick={()=>limitarEntidad(u,true)}>Limitar a {ENTIDAD_NOMBRE}</button>)}
                   </>
                 )}
               </div>
