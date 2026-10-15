@@ -958,6 +958,25 @@ const App = () => {
     return ()=>unsub();
   },[]);
 
+  // Cierre de sesión automático por inactividad (30 minutos sin tocar la pantalla).
+  useEffect(()=>{
+    if(!user) return;
+    const LIMITE = 30*60*1000;
+    let ultimo = Date.now();
+    const marcar = ()=>{ ultimo = Date.now(); };
+    const evs = ['mousemove','mousedown','keydown','touchstart','scroll','click'];
+    evs.forEach(e=>window.addEventListener(e, marcar, {passive:true}));
+    const t = setInterval(async ()=>{
+      if(Date.now()-ultimo > LIMITE){
+        clearInterval(t);
+        try{ if(user.isAnonymous) await db.collection('sesiones').doc(user.uid).delete(); }catch(e){}
+        try{ await auth.signOut(); }catch(e){}
+        showToast('Tu sesión se cerró por inactividad (30 minutos). Ingresa de nuevo.');
+      }
+    }, 30*1000);
+    return ()=>{ clearInterval(t); evs.forEach(e=>window.removeEventListener(e, marcar)); };
+  },[user]);
+
   if(CONFIG_IS_PLACEHOLDER) return <SetupNotice/>;
   if(loading) return <div className="loading">Cargando…</div>;
   if(!user) return <AuthGate marca={marca}/>;
@@ -1099,14 +1118,38 @@ const PortalApp = ({marca}) => {
     return ()=>{ cancelled = true; };
   },[portalUser, periodoId, assignments]);
 
-  const exit = async () => { setPortalUser(null); setView('login'); setCode(''); await auth.signOut(); };
+  const exit = async () => { setPortalUser(null); setView('login'); setCode(''); try{ if(auth.currentUser) await db.collection('sesiones').doc(auth.currentUser.uid).delete(); }catch(e){} await auth.signOut(); };
 
   const tryLogin = async () => {
     const codeTrim = code.trim().toUpperCase();
     if(!codeTrim){ setLoginError(true); return; }
     setLoggingIn(true);
     try{
-      // Consulta puntual por el código exacto — cuesta una lectura, no toda la colección.
+      // 1) El código se valida en el servidor: se busca el "acceso" de ESTA entidad
+      //    y ESTE periodo (un documento por código, sin listar a nadie).
+      const entRef = db.collection('entidades').doc(ENTIDAD_ID);
+      let colabId = null;
+      try{
+        const ac = await entRef.collection('accesos').doc(periodoId+'__'+codeTrim).get();
+        if(ac.exists) colabId = ac.data().colaboradorId;
+      }catch(e){ /* sin permiso o sin conexión: se intenta el método anterior */ }
+      // 2) Se amarra esta sesión a la entidad: las reglas de la base de datos solo
+      //    dejan leer datos de ESTA entidad a una sesión de colaborador vinculada a ella.
+      if(colabId){
+        try{
+          await db.collection('sesiones').doc(auth.currentUser.uid).set({
+            entidad: ENTIDAD_ID, periodoId, colaboradorId: colabId, codigo: codeTrim,
+            createdAt: FieldValueCompat.serverTimestamp()
+          });
+        }catch(e){ console.error('No se pudo vincular la sesión:', e); }
+        const d0 = await entidadPeriodos().doc(periodoId).collection('collaborators').doc(colabId).get();
+        if(!d0.exists){ setLoginError(true); setLoggingIn(false); return; }
+        setLoginError(false);
+        setPortalUser({id:d0.id, ...d0.data()});
+        setView('tasks');
+        return;
+      }
+      // Método anterior (solo mientras se completa la migración de accesos)
       const snap = await entidadPeriodos().doc(periodoId).collection('collaborators').where('accessCode','==',codeTrim).limit(1).get();
       if(snap.empty){ setLoginError(true); setLoggingIn(false); return; }
       const doc = snap.docs[0];
@@ -1445,6 +1488,7 @@ const AdminApp = ({user, marca}) => {
   const [evaluations, setEvaluations] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [supervisores, setSupervisores] = useState([]);
+  const [collabsFor, setCollabsFor] = useState(null);
 
   const periodo = periodos.find(p=>p.id===periodoId) || null;
   const areas = (periodo && periodo.areas) || [];
@@ -1468,12 +1512,39 @@ const AdminApp = ({user, marca}) => {
     if(!periodoId){ setQuestionnaires([]); setCollaborators([]); setAssignments([]); setEvaluations([]); setSupervisores([]); return; }
     const ref = entidadPeriodos().doc(periodoId);
     const u1 = ref.collection('questionnaires').onSnapshot(s=>{const a=[];s.forEach(d=>a.push({id:d.id,...d.data()}));setQuestionnaires(a);});
-    const u2 = ref.collection('collaborators').onSnapshot(s=>{const a=[];s.forEach(d=>a.push({id:d.id,...d.data()}));setCollaborators(a);});
+    const u2 = ref.collection('collaborators').onSnapshot(s=>{const a=[];s.forEach(d=>a.push({id:d.id,...d.data()}));setCollaborators(a);setCollabsFor(periodoId);});
     const u3 = ref.collection('assignments').onSnapshot(s=>{const a=[];s.forEach(d=>a.push({id:d.id,...d.data()}));setAssignments(a);});
     const u4 = ref.collection('evaluations').onSnapshot(s=>{const a=[];s.forEach(d=>a.push({id:d.id,...d.data()}));setEvaluations(a);});
     const u5 = ref.collection('supervisores').onSnapshot(s=>{const a=[];s.forEach(d=>a.push({id:d.id,...d.data()}));setSupervisores(a);});
     return ()=>{u1();u2();u3();u4();u5();};
   },[periodoId]);
+
+  // Mantiene al día /entidades/{entidad}/accesos: un documento por código de acceso
+  // (periodo + código -> colaborador). Es lo que permite validar el código en el
+  // servidor sin abrir la lista de colaboradores a nadie. Se actualiza sola cada vez
+  // que cambian los colaboradores del periodo.
+  useEffect(()=>{
+    if(!periodoId || isSupervisor || collabsFor!==periodoId) return;
+    let cancel = false;
+    (async()=>{
+      try{
+        const acRef = db.collection('entidades').doc(ENTIDAD_ID).collection('accesos');
+        const snap = await acRef.where('periodoId','==',periodoId).get();
+        const have = {}; snap.forEach(d=>{ have[d.id] = d.data(); });
+        const want = {};
+        collaborators.forEach(c=>{ if(c.accessCode) want[periodoId+'__'+String(c.accessCode).trim().toUpperCase()] = c.id; });
+        const ops = [];
+        Object.keys(want).forEach(id=>{ if(!have[id] || have[id].colaboradorId!==want[id]) ops.push(['set', id, want[id]]); });
+        Object.keys(have).forEach(id=>{ if(!(id in want)) ops.push(['del', id]); });
+        for(let i=0;i<ops.length && !cancel;i+=400){
+          const batch = db.batch();
+          ops.slice(i,i+400).forEach(o=>{ o[0]==='set' ? batch.set(acRef.doc(o[1]), {periodoId, colaboradorId:o[2]}) : batch.delete(acRef.doc(o[1])); });
+          await batch.commit();
+        }
+      }catch(e){ console.error('Sincronizar accesos:', e); }
+    })();
+    return ()=>{ cancel = true; };
+  },[periodoId, collaborators, isSupervisor, collabsFor]);
 
   // ---- helpers de escritura Firestore, ligados al periodo activo ----
   const col = (name) => entidadPeriodos().doc(periodoId).collection(name);
